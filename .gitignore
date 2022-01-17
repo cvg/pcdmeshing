@@ -1,0 +1,6 @@
+CGAL*
+boost*
+*.egg-info
+*.so
+build/
+__pycache__
