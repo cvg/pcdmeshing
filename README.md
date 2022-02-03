@@ -16,22 +16,14 @@ git clone --recursive git@github.com:cvg/pcdmeshing.git
 cd pcdmeshing
 ```
 
-2. Install CGAL>=5.3.1 and Boost>=1.71. The builds of the Ubuntu package manager (`libcgal-dev` and `libboost-all-dev`) are usually too old, so we build from the header-only sources:
+2. Install Boost>=1.71. The builds of the Ubuntu package manager `libboost-all-dev` is usually too old, so we build from the header-only sources:
 
 ```sh
-wget https://github.com/CGAL/cgal/releases/download/v5.3.1/CGAL-5.3.1.tar.xz
-tar xf CGAL-5.3.1.tar.xz
 wget https://boostorg.jfrog.io/artifactory/main/release/1.77.0/source/boost_1_77_0.tar.gz
 tar xzf boost_1_77_0.tar.gz
 ```
 
-3. Install the Python requirements numpy and Open3D:
-
-```sh
-pip install -r requirements.txt
-```
-
-4. Build the package:
+3. Build the package and install the dependencies listed in `requirements.txt`:
 
 ```sh
 pip install .
