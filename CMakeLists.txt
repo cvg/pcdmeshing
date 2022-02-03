@@ -5,10 +5,10 @@ project(pcdmeshing)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CGAL_DIR ${CMAKE_CURRENT_LIST_DIR}/CGAL-5.3.1/lib/cmake/CGAL)
+set(CGAL_DIR ${CMAKE_CURRENT_LIST_DIR}/cgal)
 set(BOOST_ROOT ${CMAKE_CURRENT_LIST_DIR}/boost_1_77_0)
 
-find_package(CGAL 5.3.1 REQUIRED)
+find_package(CGAL 5.5.0 REQUIRED)
 message(STATUS "Found CGAL ${CGAL_VERSION}")
 find_package(Boost 1.71 REQUIRED)
 find_package(OpenMP REQUIRED)
