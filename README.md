@@ -34,7 +34,7 @@ pip install .
 ```python
 from pcdmeshing import run_block_meshing
 
-mesh = run_block_meshing(
+mesh, _ = run_block_meshing(
         pcd: Union[Path, o3d.geometry.PointCloud],
         voxel_size: float = 20,
         margin_seam: float = 0.2,
@@ -45,5 +45,7 @@ mesh = run_block_meshing(
         pcd_all_path: Optional[Path] = None,
         pcd_obs_path: Optional[Path] = None,
         opts: Dict = dict(max_edge_length=1., max_visibility=10),
+        simplify_fn: Optional[Callable] = None,
+        cleanup: bool = True,
 ) -> o3d.geometry.TriangleMesh
 ```

@@ -1,4 +1,4 @@
-from typing import Union, Optional, Dict, Tuple
+from typing import Union, Optional, Dict, Tuple, List, Callable
 from pathlib import Path
 from functools import partial
 from multiprocessing import Pool
@@ -75,6 +75,21 @@ def export_visibility_info(pcd_all_path: Path,
     return tmp_paths
 
 
+def merge_mesh_blocks(grid: VoxelGrid, vids: List[int], block_size: float,
+                      tmp_mesh_dir: Path, tmp_filenames: Dict[int, Path],
+                      postprocess: Optional[Callable] = None) -> o3d.geometry.TriangleMesh:
+    mesh_total = o3d.geometry.TriangleMesh()
+    for vid in tqdm(vids):
+        mesh_block = read_mesh(tmp_mesh_dir / tmp_filenames[vid])
+        center = grid.voxel_center_from_index(grid.voxel_id_to_index(vid))
+        bbox = o3d.geometry.AxisAlignedBoundingBox(center-block_size, center+block_size)
+        mesh_block = mesh_block.crop(bbox)
+        if postprocess:
+            mesh_block = postprocess(mesh_block)
+        mesh_total += mesh_block
+        del mesh_block
+    return mesh_total
+
 
 def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
                       voxel_size: float = 20,
@@ -86,8 +101,9 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
                       pcd_all_path: Optional[Path] = None,
                       pcd_obs_path: Optional[Path] = None,
                       opts: Dict = dict(max_edge_length=1., max_visibility=10),
+                      simplify_fn: Optional[Callable] = None,
                       cleanup: bool = True,
-                      ) -> o3d.geometry.TriangleMesh:
+                      ) -> Tuple[o3d.geometry.TriangleMesh]:
     if tmp_dir is None:
         tmp_dir = Path("/tmp/block_meshing/")
     tmp_dir.mkdir(exist_ok=True, parents=True)
@@ -133,22 +149,18 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
         ret = list(tqdm(pool.imap(partial(reconstruction_fn, **opts), args), total=len(args)))
     assert all(ret), ret
 
-    bbox_size = grid.voxel_size // 2 + margin_seam
-    mesh_total = None
-    for vid in tqdm(vid2pidxs_overlap):
-        mesh_block = read_mesh(tmp_mesh_dir / tmp_filenames[vid])
-        center = grid.voxel_center_from_index(grid.voxel_id_to_index(vid))
-        bbox = o3d.geometry.AxisAlignedBoundingBox(center-bbox_size, center+bbox_size)
-        mesh_block = mesh_block.crop(bbox)
-        if mesh_total is None:
-            mesh_total = mesh_block
-        else:
-            mesh_total += mesh_block
-        del mesh_block
+    block_size = grid.voxel_size // 2 + margin_seam
+    mesh = merge_mesh_blocks(grid, vid2pidxs_overlap.keys(), block_size,
+                             tmp_mesh_dir, tmp_filenames)
+    mesh = mesh.merge_close_vertices(1e-3).remove_degenerate_triangles()
 
-    mesh_total = mesh_total.merge_close_vertices(1e-3).remove_degenerate_triangles()
+    simplified = None
+    if simplify_fn is not None:
+        simplified = merge_mesh_blocks(grid, vid2pidxs_overlap.keys(), block_size,
+                                       tmp_mesh_dir, tmp_filenames, simplify_fn)
+        simplified = simplified.merge_close_vertices(1e-3).remove_degenerate_triangles()
 
     if cleanup:
         shutil.rmtree(str(tmp_dir))
 
-    return mesh_total
+    return mesh, simplified
