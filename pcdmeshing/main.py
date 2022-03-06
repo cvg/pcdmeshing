@@ -6,6 +6,7 @@ import shutil
 import open3d as o3d
 import numpy as np
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 
 from .utils import (
     VoxelGrid,
@@ -145,8 +146,7 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
             + (tmp_vis_paths[vid] if use_visibility else None,)
             for vid in vid2pidxs_overlap]
     tmp_mesh_dir.mkdir(exist_ok=True)
-    with Pool(processes=num_parallel) as pool:
-        ret = list(tqdm(pool.imap(partial(reconstruction_fn, **opts), args), total=len(args)))
+    ret = process_map(partial(reconstruction_fn, **opts), args, max_workers=num_parallel)
     assert all(ret), ret
 
     block_size = grid.voxel_size // 2 + margin_seam
