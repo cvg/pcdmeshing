@@ -149,7 +149,7 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
     ret = process_map(partial(reconstruction_fn, **opts), args, max_workers=num_parallel)
     assert all(ret), ret
 
-    block_size = grid.voxel_size // 2 + margin_seam
+    block_size = grid.voxel_size / 2 + margin_seam
     mesh = merge_mesh_blocks(grid, vid2pidxs_overlap.keys(), block_size,
                              tmp_mesh_dir, tmp_filenames)
     mesh = mesh.merge_close_vertices(1e-3).remove_degenerate_triangles()

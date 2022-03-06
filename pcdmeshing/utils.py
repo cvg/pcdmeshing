@@ -8,7 +8,7 @@ import plyfile
 
 class VoxelGrid:
     def __init__(self, min_: np.ndarray, max_: np.ndarray, voxel_size: float):
-        self.origin = min_ - voxel_size // 2
+        self.origin = min_ - voxel_size / 2
         self.voxel_size = voxel_size
         self.num_indices = self.xyz_to_voxel_index(max_) + 1
 
@@ -64,7 +64,7 @@ class VoxelGrid:
         '''Create a mapping from voxel ID to indices of 3D points in a bounding box centered
            at the voxel. Fast search based on neighbording voxels.'''
         assert margin < self.voxel_size
-        query_size = self.voxel_size // 2 + margin
+        query_size = self.voxel_size / 2 + margin
         vid2pidxs_overlap = {}
 
         for vid in tqdm(vid2pidxs):
