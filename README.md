@@ -49,3 +49,6 @@ mesh, _ = run_block_meshing(
         cleanup: bool = True,
 ) -> o3d.geometry.TriangleMesh
 ```
+
+## License
+The code of this repository is provided under the Apache-2.0 license. Please note that the implementation of the underlying Advancing Front algorithm follows the GPLv3+  license of CGAL.
