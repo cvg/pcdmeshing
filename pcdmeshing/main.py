@@ -8,12 +8,7 @@ import numpy as np
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
-from .utils import (
-    VoxelGrid,
-    read_pointcloud_o3d, read_pointcloud_np,
-    write_pointcloud_o3d, write_pointcloud_np,
-    read_mesh,
-)
+from .utils import VoxelGrid, PointCloud, Mesh
 from ._pcdmeshing import meshing_from_paths, meshing_from_paths_with_vis
 
 
@@ -31,63 +26,65 @@ def reconstruction_fn(args, max_edge_length: float = 1., max_visibility: int = 5
     return True
 
 
-def export_visibility_info(pcd_all_path: Path,
-                           pcd_obs_path: Path,
-                           tmp_vis_dir: Path,
-                           grid: VoxelGrid,
-                           margin: float,
-                           points: np.ndarray,
-                           vid2pidxs: Dict[int, np.ndarray]
-                           ) -> Dict[int, Tuple[Path]]:
-    tmp_paths = {}
-    for vid in tqdm(vid2pidxs):
-        key = '_'.join(map(str, grid.voxel_id_to_index(vid)))
-        endpoints_path = tmp_vis_dir / (key+"_all.ply")
-        obs_path = tmp_vis_dir / (key+"_obs.ply")
-        tmp_paths[vid] = (endpoints_path, obs_path)
-    if tmp_vis_dir.exists():
-        return tmp_paths
+# def export_visibility_info(pcd_all_path: Path,
+                           # pcd_obs_path: Path,
+                           # tmp_vis_dir: Path,
+                           # grid: VoxelGrid,
+                           # margin: float,
+                           # points: np.ndarray,
+                           # vid2pidxs: Dict[int, np.ndarray]
+                           # ) -> Dict[int, Tuple[Path]]:
+    # tmp_paths = {}
+    # for vid in tqdm(vid2pidxs):
+        # key = '_'.join(map(str, grid.voxel_id_to_index(vid)))
+        # endpoints_path = tmp_vis_dir / (key+"_all.ply")
+        # obs_path = tmp_vis_dir / (key+"_obs.ply")
+        # tmp_paths[vid] = (endpoints_path, obs_path)
+    # if tmp_vis_dir.exists():
+        # return tmp_paths
 
-    points_all = read_pointcloud_np(pcd_all_path)
-    points_obs_all = read_pointcloud_np(pcd_obs_path)
+    # points_all = read_pointcloud_np(pcd_all_path)
+    # points_obs_all = read_pointcloud_np(pcd_obs_path)
 
-    vid2pidxs_overlap_all = grid.voxelize_points_with_overlap(
-        grid.voxelize_points(points_all), points_all, margin)
-    dtype = o3d.core.Dtype.Float32
+    # vid2pidxs_overlap_all = grid.voxelize_points_with_overlap(
+        # grid.voxelize_points(points_all), points_all, margin)
+    # dtype = o3d.core.Dtype.Float32
 
-    tmp_vis_dir.mkdir(exist_ok=True)
-    for vid in tqdm(vid2pidxs):
-        indices_crop = vid2pidxs_overlap_all[vid]
-        points_crop = points_all[indices_crop]
-        points_block = points[vid2pidxs[vid]]
+    # tmp_vis_dir.mkdir(exist_ok=True)
+    # for vid in tqdm(vid2pidxs):
+        # indices_crop = vid2pidxs_overlap_all[vid]
+        # points_crop = points_all[indices_crop]
+        # points_block = points[vid2pidxs[vid]]
 
-        nns = o3d.core.nns.NearestNeighborSearch(o3d.core.Tensor(points_crop, dtype=dtype))
-        nns.hybrid_index()
-        indices_knn, _ = nns.hybrid_search(o3d.core.Tensor(points_block, dtype=dtype), 0.01**2, 1)
-        indices_knn = np.unique(indices_knn[:, 0].numpy())
-        if indices_knn[0] == -1:
-            indices_knn = indices_knn[1:]
-        indices_block = indices_crop[indices_knn]
+        # nns = o3d.core.nns.NearestNeighborSearch(o3d.core.Tensor(points_crop, dtype=dtype))
+        # nns.hybrid_index()
+        # indices_knn, _ = nns.hybrid_search(o3d.core.Tensor(points_block, dtype=dtype), 0.01**2, 1)
+        # indices_knn = np.unique(indices_knn[:, 0].numpy())
+        # if indices_knn[0] == -1:
+            # indices_knn = indices_knn[1:]
+        # indices_block = indices_crop[indices_knn]
 
-        endpoints_path, obs_path = tmp_paths[vid]
-        write_pointcloud_np(endpoints_path, points_all[indices_block])
-        write_pointcloud_np(obs_path, points_obs_all[indices_block])
+        # endpoints_path, obs_path = tmp_paths[vid]
+        # write_pointcloud_np(endpoints_path, points_all[indices_block])
+        # write_pointcloud_np(obs_path, points_obs_all[indices_block])
 
-    return tmp_paths
+    # return tmp_paths
 
 
 def merge_mesh_blocks(grid: VoxelGrid, vids: List[int], block_size: float,
                       tmp_mesh_dir: Path, tmp_filenames: Dict[int, Path],
-                      postprocess: Optional[Callable] = None) -> o3d.geometry.TriangleMesh:
-    mesh_total = o3d.geometry.TriangleMesh()
+                      postprocess: Optional[Callable] = None) -> Mesh:
+    mesh_total = None
     for vid in tqdm(vids):
-        mesh_block = read_mesh(tmp_mesh_dir / tmp_filenames[vid])
+        mesh_block = Mesh.read(tmp_mesh_dir / tmp_filenames[vid])
         center = grid.voxel_center_from_index(grid.voxel_id_to_index(vid))
-        bbox = o3d.geometry.AxisAlignedBoundingBox(center-block_size, center+block_size)
-        mesh_block = mesh_block.crop(bbox)
+        mesh_block = mesh_block.crop(center-block_size, center+block_size)
         if postprocess:
             mesh_block = postprocess(mesh_block)
-        mesh_total += mesh_block
+        if mesh_total is None:
+            mesh_total = mesh_block
+        else:
+            mesh_total = mesh_total + mesh_block
         del mesh_block
     return mesh_total
 
@@ -119,12 +116,13 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
         if pcd_obs_path is None or not pcd_obs_path.exists():
             raise ValueError(f"Incorrect observation file: {pcd_obs_path}.")
 
-    if isinstance(pcd, (Path, str)):
-        pcd = read_pointcloud_o3d(pcd)
-    points = np.asarray(pcd.points, dtype=np.float32)
-    grid = VoxelGrid(points.min(0), points.max(0), voxel_size=voxel_size)
+    if isinstance(pcd, o3d.geometry.PointCloud):
+        pcd = PointCloud.from_o3d(pcd)
+    else:
+        pcd = PointCloud.read(pcd)
+    grid = VoxelGrid(pcd.points.min(0), pcd.points.max(0), voxel_size=voxel_size)
     vid2pidxs_overlap = grid.voxelize_points_with_overlap(
-        grid.voxelize_points(points), points, margin_overlap)
+        grid.voxelize_points(pcd.points), pcd.points, margin_overlap)
 
     tmp_filenames = {vid: '_'.join(map(str, grid.voxel_id_to_index(vid))) + ".ply"
                      for vid in vid2pidxs_overlap}
@@ -134,16 +132,16 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
         if path.exists():
             continue
         pcd_block = pcd.select_by_index(pidxs)
-        write_pointcloud_o3d(path, pcd_block)
+        pcd_block.write(path)
         del pcd_block
     del pcd
 
-    if use_visibility:
-        tmp_vis_paths = export_visibility_info(
-            pcd_all_path, pcd_obs_path, tmp_vis_dir, grid,
-            margin_overlap, points, vid2pidxs_overlap)
-    args = [(tmp_pcd_dir/tmp_filenames[vid], tmp_mesh_dir/tmp_filenames[vid])
-            + (tmp_vis_paths[vid] if use_visibility else None,)
+    # if use_visibility:
+        # tmp_vis_paths = export_visibility_info(
+            # pcd_all_path, pcd_obs_path, tmp_vis_dir, grid,
+            # margin_overlap, points, vid2pidxs_overlap)
+    args = [(tmp_pcd_dir/tmp_filenames[vid], tmp_mesh_dir/tmp_filenames[vid], None)
+            # + (tmp_vis_paths[vid] if use_visibility else None,)
             for vid in vid2pidxs_overlap]
     tmp_mesh_dir.mkdir(exist_ok=True)
     ret = process_map(partial(reconstruction_fn, **opts), args, max_workers=num_parallel)
@@ -152,15 +150,16 @@ def run_block_meshing(pcd: Union[Path, o3d.geometry.PointCloud],
     block_size = grid.voxel_size / 2 + margin_seam
     mesh = merge_mesh_blocks(grid, vid2pidxs_overlap.keys(), block_size,
                              tmp_mesh_dir, tmp_filenames)
-    mesh = mesh.merge_close_vertices(1e-3).remove_degenerate_triangles()
+    # mesh = mesh.merge_close_vertices(1e-3).remove_degenerate_triangles()
 
     simplified = None
     if simplify_fn is not None:
         simplified = merge_mesh_blocks(grid, vid2pidxs_overlap.keys(), block_size,
                                        tmp_mesh_dir, tmp_filenames, simplify_fn)
-        simplified = simplified.merge_close_vertices(1e-3).remove_degenerate_triangles()
+        # simplified = simplified.merge_close_vertices(1e-3).remove_degenerate_triangles()
+        simplified = simplified.to_o3d()
 
     if cleanup:
         shutil.rmtree(str(tmp_dir))
 
-    return mesh, simplified
+    return mesh.to_o3d(), simplified

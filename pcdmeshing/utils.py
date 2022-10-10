@@ -1,9 +1,140 @@
-from typing import Dict
+from typing import Dict, Optional
 from pathlib import Path
+from dataclasses import dataclass
 import numpy as np
 import open3d as o3d
 from tqdm import tqdm
 import plyfile
+
+
+@dataclass
+class PointCloud:
+    points: np.ndarray
+    colors: Optional[np.ndarray] = None
+    normals: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        assert self.points.ndim == 2 and self.points.shape[-1] == 3
+        if self.colors is not None:
+            assert self.colors.ndim == 2 and self.colors.shape[-1] == 3
+            assert len(self.points) == len(self.colors)
+        if self.normals is not None:
+            assert self.normals.ndim == 2 and self.normals.shape[-1] == 3
+            assert len(self.points) == len(self.normals)
+
+    @classmethod
+    def from_o3d(cls, pcd: o3d.geometry.PointCloud):
+        points = np.asarray(pcd.points).astype(np.float32, copy=False)
+        if pcd.has_colors():
+            colors = (np.asarray(pcd.colors)*255).astype(np.uint8)
+        else:
+            colors = None
+        if pcd.has_normals():
+            normals = np.asarray(pcd.normals).astype(np.float32, copy=False)
+        else:
+            normals = None
+        return cls(points, colors, normals)
+
+    @classmethod
+    def read(cls, path: Path, read_normals: bool = True, read_colors: bool = True):
+        data = plyfile.PlyData.read(path)['vertex']
+        points = np.stack([np.asarray(data[i]) for i in ('x', 'y', 'z')], -1)
+        if read_normals and all(i in data for i in ('nx', 'ny', 'nz')):
+            normals = np.stack([np.asarray(data[i]) for i in ('nx', 'ny', 'nz')], -1)
+        else:
+            normals = None
+        if read_colors and all(i in data for i in ('red', 'green', 'blue')):
+            colors = np.stack([np.asarray(data[i]) for i in ('red', 'green', 'blue')], -1)
+        else:
+            colors = None
+        return cls(points, colors, normals)
+
+    def write(self, path: Path, write_colors: bool = True):
+        write_colors = write_colors and self.colors is not None
+        write_normals = self.normals is not None
+        dtypes = [(i, self.points.dtype) for i in ('x', 'y', 'z')]
+        if write_colors:
+            dtypes.extend([(i, self.colors.dtype) for i in ('red', 'green', 'blue')])
+        if write_normals:
+            dtypes.extend([(i, self.normals.dtype) for i in ('nx', 'ny', 'nz')])
+        data = np.empty(len(self.points), dtype=dtypes)
+        data['x'], data['y'], data['z'] = self.points.T
+        if write_colors:
+            data['red'], data['green'], data['blue'] = self.colors.T
+        if write_normals:
+            data['nx'], data['ny'], data['nz'] = self.normals.T
+        with open(str(path), mode='wb') as f:
+            plyfile.PlyData([plyfile.PlyElement.describe(data, 'vertex')]).write(f)
+
+    def select_by_index(self, indices):
+        return self.__class__(
+            self.points[indices],
+            None if self.colors is None else self.colors[indices],
+            None if self.normals is None else self.normals[indices],
+        )
+
+
+@dataclass
+class Mesh:
+    vertices: np.ndarray
+    faces: np.ndarray
+    colors: Optional[np.ndarray] = None
+
+    @classmethod
+    def read(cls, path: Path):
+        data = plyfile.PlyData.read(path)
+        vertices = data['vertex']
+        points = np.stack([np.asarray(vertices[i]) for i in ('x', 'y', 'z')], -1)
+        if all(i in vertices for i in ('red', 'green', 'blue')):
+            colors = np.stack([np.asarray(vertices[i]) for i in ('red', 'green', 'blue')], -1)
+        else:
+            colors = None
+        faces = np.vstack(data['face']['vertex_indices'])
+        return cls(points, faces, colors)
+
+    def write(self, path: Path):
+        write_colors = self.colors is not None
+        dtypes = [(i, self.vertices.dtype) for i in ('x', 'y', 'z')]
+        if write_colors:
+            dtypes.extend([(i, self.colors.dtype) for i in ('red', 'green', 'blue')])
+        vertices = np.empty(len(self.vertices), dtype=dtypes)
+        vertices['x'], vertices['y'], vertices['z'] = self.vertices.T
+        if write_colors:
+            vertices['red'], vertices['green'], vertices['blue'] = self.colors.T
+        faces = np.empty(len(self.faces), dtype=[('vertex_indices', self.faces.dtype, (3,))])
+        faces['vertex_indices'] = self.faces
+        with open(str(path), mode='wb') as f:
+            plyfile.PlyData([
+                plyfile.PlyElement.describe(vertices, 'vertex'),
+                plyfile.PlyElement.describe(faces, 'face'),
+            ]).write(f)
+
+    def to_o3d(self) -> o3d.geometry.TriangleMesh:
+        mesh = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(self.vertices.astype(np.float64, copy=False)),
+            o3d.utility.Vector3iVector(self.faces))
+        mesh.vertex_colors = o3d.utility.Vector3dVector(self.colors/255.)
+        return mesh
+
+    def crop(self, min_, max_):
+        keep = np.all(self.vertices >= min_, 1) & np.all(self.vertices <= max_, 1)
+        new_indices = np.full(len(self.vertices), -1, self.faces.dtype)
+        new_indices[keep] = np.arange(np.count_nonzero(keep), dtype=new_indices.dtype)
+        keep_faces = keep[self.faces].all(1)
+        return self.__class__(
+            self.vertices[keep],
+            new_indices[self.faces[keep_faces]],
+            None if self.colors is None else self.colors[keep],
+        )
+
+    def __add__(self, other):
+        vertices = np.concatenate([self.vertices, other.vertices], 0)
+        faces = np.concatenate([self.faces, other.faces+len(self.vertices)], 0)
+        if self.colors is None or other.colors is None:
+            colors = None
+        else:
+            colors = np.concatenate([self.colors, other.colors], 0)
+        return self.__class__(vertices, faces, colors)
 
 
 class VoxelGrid:
@@ -92,56 +223,3 @@ class VoxelGrid:
             vid2pidxs_overlap[vid] = pidxs
 
         return vid2pidxs_overlap
-
-
-def read_pointcloud_o3d(path: Path) -> o3d.geometry.PointCloud:
-    '''Reads also colors and normals but stores the points at float64.'''
-    return o3d.io.read_point_cloud(str(path))
-
-
-def read_pointcloud_np(path: Path) -> np.ndarray:
-    '''Only reads the point coordinates but preserves the float32 dtype.'''
-    pcd = o3d.t.io.read_point_cloud(str(path))
-    return np.asarray(pcd.point["points"].numpy())
-
-
-def write_pointcloud_o3d(path: Path, pcd: o3d.geometry.PointCloud,
-                         write_normals: bool = True, xyz_dtype: str = 'float32'):
-    '''Currently o3d.t.io.write_point_cloud writes non-standard types but #4553 should fixe it.'''
-    # pcd_t = o3d.t.geometry.PointCloud(o3d.core.Tensor(np.asarray(pcd.points)))
-    # if pcd.has_normals():
-        # pcd_t.point["normals"] = o3d.core.Tensor(np.asarray(pcd.normals))
-    # if pcd.has_colors():
-        # pcd_t.point["colors"] = o3d.core.Tensor(np.asarray(pcd.colors), dtype=o3d.core.Dtype.UInt8)
-    # o3d.t.io.write_point_cloud(str(path), pcd_t)
-    write_normals = write_normals and pcd.has_normals()
-    dtypes = [('x', xyz_dtype), ('y', xyz_dtype), ('z', xyz_dtype)]
-    if write_normals:
-        dtypes.extend([('nx', xyz_dtype), ('ny', xyz_dtype), ('nz', xyz_dtype)])
-    if pcd.has_colors():
-        dtypes.extend([('red', 'u1'), ('green', 'u1'), ('blue', 'u1')])
-    data = np.empty(len(pcd.points), dtype=dtypes)
-    data['x'], data['y'], data['z'] = np.asarray(pcd.points).T
-    if write_normals:
-        data['nx'], data['ny'], data['nz'] = np.asarray(pcd.normals).T
-    if pcd.has_colors():
-        colors = (np.asarray(pcd.colors)*255).astype(np.uint8)
-        data['red'], data['green'], data['blue'] = colors.T
-    with open(str(path), mode='wb') as f:
-        plyfile.PlyData([plyfile.PlyElement.describe(data, 'vertex')]).write(f)
-
-
-def write_pointcloud_np(path: Path, points: np.ndarray):
-    '''Only writes the point coordinates but preserves the float32 dtype.'''
-    o3d.t.io.write_point_cloud(
-        str(path),
-        o3d.t.geometry.PointCloud(o3d.core.Tensor(points)))
-
-
-def read_mesh(path: Path) -> o3d.geometry.TriangleMesh:
-    return o3d.io.read_triangle_mesh(str(path))
-
-
-def write_mesh(path: Path, mesh: o3d.geometry.TriangleMesh):
-    o3d.io.write_triangle_mesh(
-        str(path), mesh, compressed=True, print_progress=True)
